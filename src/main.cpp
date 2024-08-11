@@ -32,16 +32,27 @@ u32_t last_data_ready_packet;
 char last_value[16];
 
 IRAM_ATTR void clock_isr() {
+  // This interrupt is triggered when the clock line goes low.
+  // packet vs data_ready_packet vs last_data_ready_packet?
+  // Invert the newly-read bit on the MISO line.
   int new_data = digitalRead(MISO) ? 0 : 1;
   unsigned long new_millis = millis();
   if (new_millis - last_millis > MILLIS_BETWEEN_PACKETS)
   {
+    // Does this mean we simply assume that we have a new packet when the time
+    // between packets is greater than the threshold?
+
+    // What prevents us from reading part of one packet and part of another,
+    // and then treating them as one packet? That would probably lead to
+    // invalid values.
     data_ready_packet = packet;
     packet = new_data;
     data_ready = true;
   }
   else
   {
+    // Shift the data to the left by one and then bitwise OR with new data.
+    // This adds a newly-read bit to the packet.
     packet = packet << 1 | new_data;
   }
   
@@ -129,9 +140,15 @@ void setup() {
 
 u32_t reverse(u32_t p)
 {
+    // Takes a 32-bit integer and reverses the bits.
+    // r |= b is equivalent to r = r | b.
+    // | is the bitwise OR operator.
     u32_t r=0;
     for(int i=0;i<24;i++) 
     {
+      // (p >> i) means shift to the right by i bits.
+      // & 1 means bitwise AND with 1.
+      // << (23-i) means shift to the left by (23-i) bits.
       r |= ((p>>i) & 1)<<(23-i);
     }
     return r;
@@ -139,13 +156,24 @@ u32_t reverse(u32_t p)
 
 void decode_vinca_bitstream(u32_t p)
 {
+    // The last 4 bits are the sign and the inch/mm flag.
+    // If the last bit is 1, it's in inches, ie xxx1 or xxx0.
     bool inch = p & 0x1;
+    // If the 4th bit is 1, it's negative, ie. 1000 or 1001.
     float sign = p & 0x8 ? -1.0 : 1.0;
+    // Why reverse the bits? Is it because we're reading one bit at a time,
+    // starting from the least significant bit?
+
+    // Bitwise AND with 111111111111111111110000, which should clear the last
+    // 4 out of 24 bits.  Since this is a 32-bit integer, what happens with
+    // the remaining 8 bits?
     p &= 0xfffff0;
+    // Reverse the bits.
     p = reverse(p);
-    
+
     float value = inch ? p * 0.0005 : p * 0.01;
     value *= sign;
+    // Write formatted string to last_value with 4 decimal places.
     sprintf(last_value, "%.4f%s\n", value, inch ? "\"" : "mm");
 }
 
@@ -156,6 +184,8 @@ void loop()
 
   if (data_ready && last_data_ready_packet != data_ready_packet)
   {
+    // If the interrupt has finished building a packet, and the packet is
+    // different from the last packet, then decode the packet.
     last_data_ready_packet = data_ready_packet;
     data_ready = false;
     decode_vinca_bitstream(last_data_ready_packet);
